@@ -33,14 +33,31 @@ import {
   Check,
   X,
   PlusCircle,
-  Package
+  Package,
+  Lock,
+  Unlock,
+  KeyRound,
+  ShieldAlert,
+  EyeOff
 } from 'lucide-react';
+
+const ADMIN_PASSCODE_STORAGE_KEY = 'pmart_admin_secret_passcode';
+const DEFAULT_PASSCODE = 'pmart2026';
 
 interface AdminDashboardProps {
   onNotify?: (msg: string, type?: 'success' | 'error' | 'info') => void;
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNotify }) => {
+  // Admin Authorization State (Only the owner with passcode can modify)
+  const [isAdminAuthenticated, setIsAdminAuthenticated] = useState<boolean>(() => {
+    return typeof sessionStorage !== 'undefined' && sessionStorage.getItem('pmart_admin_auth') === 'true';
+  });
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [passcodeInput, setPasscodeInput] = useState('');
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
+
   // Data States
   const [standardRequests, setStandardRequests] = useState<CustomerRequest[]>([]);
   const [customRequests, setCustomRequests] = useState<CustomProductRequest[]>([]);
@@ -50,6 +67,65 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNotify }) => {
   const [statusFilter, setStatusFilter] = useState<'ALL' | RequestStatus>('ALL');
   const [typeFilter, setTypeFilter] = useState<'ALL' | 'STANDARD' | 'CUSTOM'>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Guard wrapper for actions
+  const requireAdminAuth = (action: () => void) => {
+    if (isAdminAuthenticated) {
+      action();
+    } else {
+      setPendingAction(() => action);
+      setAuthModalOpen(true);
+      setAuthError(null);
+    }
+  };
+
+  const handleAuthSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const correctPasscode = typeof localStorage !== 'undefined' 
+      ? (localStorage.getItem(ADMIN_PASSCODE_STORAGE_KEY) || DEFAULT_PASSCODE)
+      : DEFAULT_PASSCODE;
+
+    if (passcodeInput.trim() === correctPasscode) {
+      setIsAdminAuthenticated(true);
+      if (typeof sessionStorage !== 'undefined') {
+        sessionStorage.setItem('pmart_admin_auth', 'true');
+      }
+      setAuthModalOpen(false);
+      setPasscodeInput('');
+      setAuthError(null);
+      onNotify?.('Admin authenticated successfully! You now have full modification access.', 'success');
+      
+      // Execute pending action if any
+      if (pendingAction) {
+        pendingAction();
+        setPendingAction(null);
+      }
+    } else {
+      setAuthError('Incorrect passcode. Only the authorized administrator can modify requests or add products.');
+    }
+  };
+
+  const handleAdminLogout = () => {
+    setIsAdminAuthenticated(false);
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.removeItem('pmart_admin_auth');
+    }
+    onNotify?.('Logged out of Admin edit mode. Portal is now in read-only mode.', 'info');
+  };
+
+  const maskPhone = (phone: string) => {
+    if (isAdminAuthenticated) return phone;
+    const clean = phone.replace(/[^0-9]/g, '');
+    if (clean.length < 5) return '***';
+    return phone.slice(0, 3) + ' ••• ••• ' + phone.slice(-2);
+  };
+
+  const maskAddress = (address: string) => {
+    if (isAdminAuthenticated) return address;
+    const parts = address.split(',');
+    const city = parts[parts.length - 2]?.trim() || 'City';
+    return `${city} (Full address protected — Admin login required)`;
+  };
 
   // Selected Request for Drawer/Inspection
   const [selectedItem, setSelectedItem] = useState<{
@@ -287,22 +363,48 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNotify }) => {
           </p>
         </div>
 
-        {/* Action Controls & Business Rule Banner */}
+        {/* Action Controls & Admin Authentication Bar */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+          {/* Admin Verification Badge */}
+          {isAdminAuthenticated ? (
+            <div className="flex items-center justify-between gap-2.5 p-2 px-3 rounded-xl bg-emerald-50 border border-emerald-300 text-emerald-800 text-xs">
+              <span className="flex items-center gap-1.5 font-bold">
+                <Unlock className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Admin Verified (Edit Access)</span>
+              </span>
+              <button
+                onClick={handleAdminLogout}
+                className="px-2.5 py-1 bg-emerald-200 hover:bg-emerald-300 text-emerald-900 rounded-lg font-bold text-[11px] transition flex items-center gap-1"
+                title="Lock portal back to read-only"
+              >
+                <Lock className="w-3 h-3" />
+                <span>Lock</span>
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between gap-2.5 p-2 px-3 rounded-xl bg-slate-100 border border-slate-300 text-slate-700 text-xs">
+              <span className="flex items-center gap-1.5 font-semibold">
+                <Lock className="w-3.5 h-3.5 text-amber-600" />
+                <span>Visitor Mode (Read-Only)</span>
+              </span>
+              <button
+                onClick={() => setAuthModalOpen(true)}
+                className="px-2.5 py-1 bg-slate-900 hover:bg-slate-800 text-white rounded-lg font-bold text-[11px] transition flex items-center gap-1 shadow-sm"
+                title="Enter owner passcode to make changes"
+              >
+                <KeyRound className="w-3 h-3 text-amber-400" />
+                <span>Owner Login</span>
+              </button>
+            </div>
+          )}
+
           <button
-            onClick={() => setAddProductModalOpen(true)}
+            onClick={() => requireAdminAuth(() => setAddProductModalOpen(true))}
             className="flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold rounded-xl text-xs sm:text-sm shadow-md shadow-blue-600/20 transition"
           >
             <PlusCircle className="w-4 h-4" />
             <span>Add New Product</span>
           </button>
-
-          <div className="p-3 bg-amber-50/80 border border-amber-200 rounded-2xl text-xs text-amber-900 flex items-center gap-2.5 max-w-md">
-            <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0" />
-            <span>
-              <strong>Reminder:</strong> Requests are inquiries and not automatically marked as paid.
-            </span>
-          </div>
         </div>
       </div>
 
@@ -463,7 +565,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNotify }) => {
                       {/* Customer Info */}
                       <td className="py-4 px-4">
                         <div className="font-bold text-slate-900">{req.customer_name}</div>
-                        <div className="text-slate-500 font-mono text-[11px]">{req.phone}</div>
+                        <div className="text-slate-500 font-mono text-[11px]">{maskPhone(req.phone)}</div>
                       </td>
 
                       {/* Product */}
@@ -509,8 +611,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNotify }) => {
                       </td>
 
                       {/* Address */}
-                      <td className="py-4 px-4 max-w-[180px] truncate text-slate-600" title={req.delivery_address}>
-                        {req.delivery_address}
+                      <td className="py-4 px-4 max-w-[180px] truncate text-slate-600" title={maskAddress(req.delivery_address)}>
+                        {maskAddress(req.delivery_address)}
                       </td>
 
                       {/* Submission Date */}
@@ -627,11 +729,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNotify }) => {
                   </div>
                   <div className="flex items-center gap-2 font-mono">
                     <Phone className="w-4 h-4 text-emerald-600" />
-                    <span>Phone: <strong className="text-slate-900">{selectedItem.item.phone}</strong></span>
+                    <span>Phone: <strong className="text-slate-900">{maskPhone(selectedItem.item.phone)}</strong></span>
                   </div>
                   <div className="sm:col-span-2 flex items-start gap-2 pt-2 border-t border-slate-200">
                     <MapPin className="w-4 h-4 text-rose-500 flex-shrink-0 mt-0.5" />
-                    <span>Delivery Address: <strong className="text-slate-800">{selectedItem.item.delivery_address}</strong></span>
+                    <span>Delivery Address: <strong className="text-slate-800">{maskAddress(selectedItem.item.delivery_address)}</strong></span>
                   </div>
                 </div>
               </div>
@@ -723,7 +825,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNotify }) => {
                     Internal Admin Notes
                   </h4>
                   <button
-                    onClick={handleSaveNotes}
+                    onClick={() => requireAdminAuth(handleSaveNotes)}
                     disabled={isSaving}
                     className="flex items-center gap-1 text-[11px] font-bold text-blue-600 hover:text-blue-800 disabled:opacity-50"
                   >
@@ -750,7 +852,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNotify }) => {
                   
                   {/* Accept Button: Opens confirmation modal to optionally adjust price and quantity */}
                   <button
-                    onClick={() => setAcceptModalOpen(true)}
+                    onClick={() => requireAdminAuth(() => setAcceptModalOpen(true))}
                     className="flex items-center justify-center gap-1.5 py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold rounded-xl text-xs shadow-sm transition"
                   >
                     <CheckCircle2 className="w-4 h-4" />
@@ -759,7 +861,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNotify }) => {
 
                   {/* Reject Button */}
                   <button
-                    onClick={() => handleUpdateStatus('REJECTED')}
+                    onClick={() => requireAdminAuth(() => handleUpdateStatus('REJECTED'))}
                     disabled={isSaving}
                     className="flex items-center justify-center gap-1.5 py-2.5 px-3 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold rounded-xl text-xs border border-rose-200 transition"
                   >
@@ -769,7 +871,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNotify }) => {
 
                   {/* Mark Completed Button */}
                   <button
-                    onClick={() => handleUpdateStatus('COMPLETED')}
+                    onClick={() => requireAdminAuth(() => handleUpdateStatus('COMPLETED'))}
                     disabled={isSaving}
                     className="flex items-center justify-center gap-1.5 py-2.5 px-3 bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold rounded-xl text-xs border border-blue-200 transition"
                   >
@@ -1028,6 +1130,90 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNotify }) => {
                   className="px-5 py-2 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold rounded-xl text-xs shadow-md transition disabled:opacity-50"
                 >
                   {isAddingProduct ? 'Adding...' : 'Add Product to Store'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Admin Passcode Authentication Modal */}
+      {authModalOpen && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-slate-100 space-y-4 animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2 text-slate-900">
+                <div className="w-9 h-9 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center font-bold">
+                  <KeyRound className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base">Admin Verification</h3>
+                  <p className="text-[11px] text-slate-400">Owner Access Required</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthModalOpen(false);
+                  setAuthError(null);
+                  setPendingAction(null);
+                }}
+                className="w-7 h-7 rounded-full hover:bg-slate-100 text-slate-400 flex items-center justify-center"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Visitors can browse and view inquiries in read-only mode. Enter the store owner passcode to accept/reject requests, edit prices, or add products.
+            </p>
+
+            <form onSubmit={handleAuthSubmit} className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Enter Admin Passcode
+                </label>
+                <input
+                  type="password"
+                  autoFocus
+                  required
+                  placeholder="Enter passcode"
+                  value={passcodeInput}
+                  onChange={(e) => {
+                    setPasscodeInput(e.target.value);
+                    if (authError) setAuthError(null);
+                  }}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:border-blue-500 focus:ring-4 focus:ring-blue-100 text-sm font-mono tracking-widest"
+                />
+                <span className="text-[10px] text-slate-400 mt-1 block">
+                  Default owner passcode: <code className="bg-slate-100 px-1 py-0.5 rounded font-mono text-slate-700">pmart2026</code>
+                </span>
+              </div>
+
+              {authError && (
+                <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-2">
+                  <ShieldAlert className="w-4 h-4 flex-shrink-0" />
+                  <span>{authError}</span>
+                </div>
+              )}
+
+              <div className="pt-2 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthModalOpen(false);
+                    setAuthError(null);
+                    setPendingAction(null);
+                  }}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl text-xs shadow-md transition"
+                >
+                  Unlock Admin Controls
                 </button>
               </div>
             </form>
